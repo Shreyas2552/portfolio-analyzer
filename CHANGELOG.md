@@ -1,5 +1,29 @@
 # Portfolio Analyzer — Changelog
 
+> **Scope:** This repo (`portfolio-analyzer`) contains **only** the Portfolio Analyzer.
+> The Control Systems Simulator lives in its own repo:
+> [`Shreyas2552/controls-simulator`](https://github.com/Shreyas2552/controls-simulator).
+> Do **not** add `pages/`, `modules/`, or any control-theory code here.
+
+---
+
+## v3.4.1 — 2026-05-02 — Separated from Control Systems Simulator
+
+The Control Systems Simulator (PID tuning, LQR/LQG, Bode plots, Kalman filter) was briefly
+merged into this repo as a Streamlit multi-page app on 2026-04-30 (commit `79747e6`) then
+reverted the same day (commit `12473eb`) due to scope creep and dependency bloat
+(numpy/scipy/plotly have no place in a portfolio app).
+
+The simulator now has its own standalone repo and Streamlit Cloud deployment:
+
+- **Repo:** https://github.com/Shreyas2552/controls-simulator
+- **Entry point:** `app.py` → pages: `1_Control_Simulator.py`, `2_LQR_LQG.py`
+- **Dependencies:** streamlit, numpy, scipy, plotly (no finance libs)
+
+This repo's `requirements.txt` stays finance-only: streamlit, requests, yfinance, pandas.
+The SCOPE section at the top of `portfolio_streamlit.py` and `CLAUDE.md` document this
+boundary so it is not crossed again.
+
 ---
 
 ## v3.4 — 2026-05-02 — API efficiency + data accuracy fixes

@@ -5,6 +5,25 @@ Run locally:  streamlit run portfolio_streamlit.py
 Deploy:       push to GitHub → connect at share.streamlit.io
 Mobile:       open the Streamlit Cloud URL on any device
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  SCOPE — THIS FILE ONLY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  This is a single-file Streamlit app for portfolio analysis.
+  It has NO pages/ sub-folder and NO modules/ sub-folder.
+
+  DO NOT add control-theory code, PID simulators, LQR/LQG,
+  Bode plots, or any non-financial feature to this file or
+  this repo. Those belong in the separate app:
+
+    Repo : https://github.com/Shreyas2552/controls-simulator
+    App  : deploy via share.streamlit.io from that repo
+
+  The two apps were previously merged into one Streamlit
+  multi-page app (commit 79747e6, reverted 12473eb, 2026-04-30).
+  That merge caused dependency bloat, scope confusion, and
+  deployment coupling. Keep them separate.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 Data architecture (v3 — yfinance-first):
   PRIMARY    → yfinance      : price, fundamentals, targets, ETF data (free, no key)
   SECONDARY  → Finnhub       : real-time price quote only (free, fast)
@@ -75,6 +94,15 @@ Data architecture (v3 — yfinance-first):
               0 holdings assumed); now correctly scores 8/10.
     CHANGED : max_workers reduced 8 → 4 to halve concurrent Yahoo Finance
               connections and reduce throttled/empty responses under load.
+
+  [2026-05-02] v3.4.1 — Separated from Control Systems Simulator
+    ARCH    : Control Systems Simulator (PID, LQR/LQG, Bode, Kalman) moved
+              to its own repo and Streamlit Cloud deployment. It was briefly
+              merged here as a multi-page app (commit 79747e6) then reverted
+              (commit 12473eb) on 2026-04-30 due to scope and dependency bloat.
+              Separate repo: https://github.com/Shreyas2552/controls-simulator
+    ADDED   : SCOPE section in this docstring and CLAUDE.md to prevent the
+              merge from recurring in the future.
 
   TODO / NEXT STEPS
     - [ ] Add sparkline price chart (30-day) inside each score card expander
