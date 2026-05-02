@@ -48,6 +48,34 @@ Data architecture (v3 — yfinance-first):
               public URL. Portfolio saves (URL params ?t= and ?saved=) work
               identically on cloud — bookmark the URL to restore everything.
 
+  [2026-05-02] v3.4 — API efficiency + data accuracy fixes
+    FIXED   : Alpha Vantage over-triggering — removed DividendYield=None and
+              TrailingPE=None as standalone AV triggers. yfinance returns None
+              (not 0) for non-dividend and loss-making stocks; those are expected
+              absences, not data gaps, and AV would also return None for them.
+              AV now only fires when yfinance returns <3 of 5 key scoring fields.
+              Reduces AV calls from ~5-6 per run to 0-2, eliminating the 1-3 min
+              freeze and exhaustion of the 25 calls/day free tier limit.
+    FIXED   : DividendYield and ytdReturn double-division — yfinance 0.2+
+              returns these fields as decimals (0.11 = 11%), not percentages.
+              Removed the erroneous /100 division that made JEPQ show 0.11%
+              yield instead of 11%, and ETF YTD returns 100x too small.
+    FIXED   : Finnhub secondary call now conditional — only fires when yfinance
+              lacks real-time change data (change_pct is None). Previously called
+              unconditionally for every ticker, adding 22 wasted Finnhub calls
+              per analysis run.
+    FIXED   : Ticker deduplication — dict.fromkeys() removes duplicate tickers
+              (e.g. BLK appearing twice in URL) while preserving order. Prevents
+              double cards in results and wasted API calls.
+    FIXED   : Smart cache clearing — clear_cache() now only runs when the ticker
+              set actually changes. Re-analyzing the same portfolio reuses the
+              30-min cache instead of always re-fetching everything.
+    ADDED   : VOOG (Vanguard S&P 500 Growth ETF) to ETF_DB — expense 0.10%,
+              231 holdings. Previously scored Diversification 2/10 (no entry →
+              0 holdings assumed); now correctly scores 8/10.
+    CHANGED : max_workers reduced 8 → 4 to halve concurrent Yahoo Finance
+              connections and reduce throttled/empty responses under load.
+
   TODO / NEXT STEPS
     - [ ] Add sparkline price chart (30-day) inside each score card expander
     - [ ] Add portfolio-level sector allocation pie chart below summary bar
@@ -206,6 +234,7 @@ ETF_DB = {
     "XLK":  {"expense":0.10,  "num_holdings":67,   "category":"Technology Sector",     "beta_fallback":1.20},
     "VGT":  {"expense":0.10,  "num_holdings":316,  "category":"Technology Sector",     "multi_class_aum":True, "beta_fallback":1.20},
     "IYW":  {"expense":0.38,  "num_holdings":144,  "category":"U.S. Technology",       "beta_fallback":1.20},
+    "VOOG": {"expense":0.10,  "num_holdings":231,  "category":"S&P 500 Growth",        "multi_class_aum":True, "beta_fallback":1.10},
     "SMH":  {"expense":0.35,  "num_holdings":26,   "category":"Semiconductors",        "beta_fallback":1.35},
     "SOXX": {"expense":0.35,  "num_holdings":30,   "category":"Semiconductors",        "beta_fallback":1.35},
     "XLF":  {"expense":0.10,  "num_holdings":74,   "category":"Financials",            "beta_fallback":1.10},
@@ -389,7 +418,7 @@ def yf_get_all(ticker):
                     info.get("fullExchangeName") or
                     exc_raw or "—")
 
-        # yfinance returns dividendYield and ytdReturn as percentages (e.g. 11.1 = 11.1%)
+        # yfinance 0.2+ returns dividendYield and ytdReturn as decimals (0.11 = 11%)
         raw_div = info.get("dividendYield")
         raw_ytd = info.get("ytdReturn")
         # Prefer TTM earnings growth; fall back to quarterly
@@ -426,7 +455,7 @@ def yf_get_all(ticker):
             "QuarterlyEarningsGrowthYOY": eg,
             "QuarterlyRevenueGrowthYOY":  info.get("revenueGrowth"),
             # ── Dividends ─────────────────────────────────────────────────────
-            "DividendYield": raw_div / 100 if raw_div is not None else None,
+            "DividendYield": raw_div if raw_div is not None else None,
             "PayoutRatio":   info.get("payoutRatio"),
             # ── 52-Week range ─────────────────────────────────────────────────
             "52WeekHigh": info.get("fiftyTwoWeekHigh"),
@@ -439,7 +468,7 @@ def yf_get_all(ticker):
             "totalAssets": info.get("totalAssets"),
             "beta":        info.get("beta"),
             "trailingPE":  info.get("trailingPE"),   # for ETF Holdings P/E display
-            "ytdReturn":   raw_ytd / 100 if raw_ytd is not None else None,
+            "ytdReturn":   raw_ytd if raw_ytd is not None else None,
         }, None
     except Exception as e:
         return {}, str(e)[:80]
@@ -753,15 +782,16 @@ def fetch_and_score(ticker, fh_key, av_key):
         change_pct = yf_info.get("change_pct")
         prev_close = yf_info.get("prev_close")
 
-        # SECONDARY: Finnhub quote for fresher real-time price
-        q, _ = fh_get("/quote", {"symbol": ticker, "token": fh_key})
-        if q and sf(q, "c") and sf(q, "c") != 0:
-            dq.ok("Finnhub")
-            fh_price = sf(q, "c")
-            if fh_price:
-                price      = fh_price
-                change_pct = sf(q, "dp")
-                if sf(q, "pc"): prev_close = sf(q, "pc")
+        # SECONDARY: Finnhub — only when yfinance lacks real-time change data
+        if change_pct is None and fh_key:
+            q, _ = fh_get("/quote", {"symbol": ticker, "token": fh_key})
+            if q and sf(q, "c") and sf(q, "c") != 0:
+                dq.ok("Finnhub")
+                fh_price = sf(q, "c")
+                if fh_price:
+                    price      = fh_price
+                    change_pct = sf(q, "dp")
+                    if sf(q, "pc"): prev_close = sf(q, "pc")
 
     # Price sanity check
     price_warn = None
@@ -815,18 +845,14 @@ def fetch_and_score(ticker, fh_key, av_key):
             "DividendYield", "PayoutRatio", "52WeekHigh", "52WeekLow")}
 
         # ── AV supplement: fill None fields when yfinance coverage is incomplete ──
-        # Trigger AV when:
-        #   (a) fewer than 3 of 5 key scoring fields are populated, OR
-        #   (b) DividendYield is None  (yf misses ~40% of tickers with small dividends), OR
-        #   (c) TrailingPE is None     (yf occasionally misses this, e.g. F)
-        # Profitability metrics (GrossMargin/NetMargin/ROE/EPS/RevGrowth) are
-        # identical between AV and yfinance — no need to call AV for those.
+        # Only trigger when fewer than 3 of 5 key scoring fields are populated.
+        # DividendYield=None and TrailingPE=None are NOT used as triggers:
+        # yfinance returns None (not 0) for non-dividend and loss-making stocks —
+        # those are expected absences, not gaps, and AV would also return None.
         _KEY = ("TrailingPE", "EVToEBITDA", "ProfitMargin",
                 "_grossMargins", "QuarterlyEarningsGrowthYOY")
         _yf_coverage = sum(1 for f in _KEY if av_compat.get(f) is not None)
-        _needs_div_yield   = av_compat.get("DividendYield") is None
-        _needs_trailing_pe = av_compat.get("TrailingPE") is None
-        if (_yf_coverage < 3 or _needs_div_yield or _needs_trailing_pe) and av_key:
+        if _yf_coverage < 3 and av_key:
             av_raw, av_err = av_get({"function": "OVERVIEW",
                                      "symbol": ticker, "apikey": av_key})
             if av_raw and not av_err:
@@ -1162,13 +1188,17 @@ with st.expander(f"⚙️ Portfolio settings — {_ticker_count} ticker{'s' if _
         st.rerun()
 
 if run_btn:
-    tickers = [t.strip().upper() for t in raw.replace(",", "\n").splitlines() if t.strip()]
+    tickers = list(dict.fromkeys(
+        t.strip().upper() for t in raw.replace(",", "\n").splitlines() if t.strip()
+    ))
     if not tickers:
         st.warning("Enter at least one ticker first.")
         st.stop()
+    old_tickers = set(st.session_state.get("tickers", []))
     st.session_state["tickers"] = tickers
     st.query_params["t"] = ",".join(tickers)
-    clear_cache()
+    if set(tickers) != old_tickers:
+        clear_cache()
 
     # ── Parallel analysis — only runs when ▶ Analyze is clicked ──────────────
     _results: list = []
@@ -1180,7 +1210,7 @@ if run_btn:
     def _fetch_one(t):
         return cached_fetch(t, FINNHUB_KEY, AV_KEY)
 
-    with ThreadPoolExecutor(max_workers=8) as executor:
+    with ThreadPoolExecutor(max_workers=4) as executor:
         future_map = {executor.submit(_fetch_one, t): t for t in tickers}
         for future in as_completed(future_map):
             t = future_map[future]
